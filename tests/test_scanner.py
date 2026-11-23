@@ -88,3 +88,17 @@ def test_credential_redaction_and_application(tmp_path):
     store.apply(state, item["id"])
     assert "FAKE_TEST_PRIVATE_VALUE" not in source.read_text()
     assert "_pp_os.environ['API_KEY']" in source.read_text()
+
+
+def test_credentials_that_share_a_line_are_repaired_and_redacted_together(tmp_path):
+    source = tmp_path / "sample.py"
+    source.write_text("API_KEY = 'FAKE_TEST_FIRST'; API_TOKEN = 'FAKE_TEST_SECOND'\n")
+    store = Store(tmp_path / ".state")
+    state = store.scan(str(tmp_path))
+    item, = state["findings"]
+    assert "FAKE_TEST_" not in json.dumps(state)
+    assert "[REDACTED CREDENTIAL]" in item["patch"]
+    store.decide(state, item["id"], "approved")
+    store.apply(state, item["id"])
+    assert "FAKE_TEST_" not in source.read_text()
+    assert "API_KEY = _pp_os.environ['API_KEY']; API_TOKEN = _pp_os.environ['API_TOKEN']" in source.read_text()

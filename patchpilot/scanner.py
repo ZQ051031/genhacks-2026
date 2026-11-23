@@ -25,6 +25,7 @@ class Repair:
     reason: str
     replacement: str
     setup: tuple[str, ...] = ()
+    also_replace: tuple[tuple[ast.AST, str], ...] = ()
 
 
 def digest(data: bytes) -> str:
@@ -62,6 +63,22 @@ def string_assignment(node):
         if isinstance(node.value, ast.Constant) and isinstance(node.value.value, (str, bytes)) and node.value.value:
             return target.id, node.value
     return None
+
+
+def credential_repairs(statements):
+    assignments = sorted(filter(None, map(string_assignment, statements)),
+                         key=lambda item: (item[1].lineno, item[1].col_offset))
+    groups = []
+    for name, node in assignments:
+        change = (node, f"_pp_os.environ[{name.upper()!r}]")
+        if groups and node.lineno <= groups[-1][-1][0].end_lineno:
+            groups[-1].append(change)
+        else:
+            groups.append([change])
+    for (node, value), *other in groups:
+        yield Repair(node, "High", "Hardcoded credential",
+                     "Credential literals can leak through source control. Rotate real credentials and read replacements from the environment.",
+                     value, ("import os as _pp_os",), tuple(other))
 
 
 def sql_repair(node, names, connections, cursors):
@@ -139,14 +156,9 @@ def repairs(tree, source, filename):
     symbols = symtable.symtable(source, filename, "exec")
     module_names = {symbol.get_name() for symbol in symbols.get_symbols()
                     if symbol.is_assigned() or symbol.is_imported() or symbol.is_namespace()}
+    yield from credential_repairs(statements)
     for node in statements:
-        secret = string_assignment(node)
-        if secret:
-            name, value = secret
-            yield Repair(value, "High", "Hardcoded credential",
-                         "The literal can leak through source control. Rotate real credentials and read the replacement from the environment.",
-                         f"_pp_os.environ[{name.upper()!r}]", ("import os as _pp_os",))
-        elif isinstance(node, ast.Call):
+        if isinstance(node, ast.Call):
             yield from repaired_calls(node, names, connections, cursors)
         elif isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
             if isinstance(node.right, ast.Constant) and type(node.right.value) in (int, float) and node.right.value == 0:
@@ -221,6 +233,8 @@ def scan_source(source, path, encoding="utf-8"):
     for repair in repairs(tree, source, path):
         node = repair.node
         start, end = node.lineno - 1, node.end_lineno
+        if repair.also_replace:
+            end = repair.also_replace[-1][0].end_lineno
         old = lines[start:end]
         newline = "\r\n" if old[0].endswith("\r\n") else "\n"
         indent = old[0][:len(old[0]) - len(old[0].lstrip())]
@@ -242,8 +256,13 @@ def scan_source(source, path, encoding="utf-8"):
                 continue
             new = [indent + replacement + (newline if old[-1].endswith("\n") else "")]
         else:
-            lead = old[0].encode()[:node.col_offset].decode()
-            trail = old[-1].encode()[node.end_col_offset:].decode()
+            original_bytes = [line.encode() for line in old]
+            edits = ((node, replacement), *repair.also_replace)
+            updated = b"".join(original_bytes)
+            for expression, text in reversed(edits):
+                before = sum(map(len, original_bytes[:expression.lineno - 1 - start])) + expression.col_offset
+                after = sum(map(len, original_bytes[:expression.end_lineno - 1 - start])) + expression.end_col_offset
+                updated = updated[:before] + text.encode() + updated[after:]
             if repair.setup:
                 if not any(
                     stmt.lineno == node.lineno and stmt.col_offset == len(indent.encode()) for stmt in statements
@@ -252,7 +271,7 @@ def scan_source(source, path, encoding="utf-8"):
                 inserted = [indent + line + newline for line in repair.setup]
             else:
                 inserted = []
-            new = inserted + [lead + replacement + trail]
+            new = inserted + source_lines(updated.decode())
         if old == new or (repair.category != "Hardcoded credential" and any(i in redacted for i in range(start + 1, end + 1))):
             continue
         candidate = "".join(lines[:start] + new + lines[end:])
