@@ -1,4 +1,6 @@
+import errno
 import json
+import os
 import shutil
 import subprocess
 from html import escape
@@ -151,3 +153,20 @@ def test_html_repair_keeps_tuple_interpolation():
     namespace = {}
     exec(source.splitlines(keepends=True)[0] + "".join(finding["replacement"]), namespace)
     assert namespace["profile"]("A", "B") == f"<p>{escape(str(('A', 'B')))}</p>"
+
+
+def test_scan_surfaces_unreadable_directory(tmp_path, monkeypatch):
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    (tmp_path / "good.py").write_text("total = 5 / 0\n")
+    real_scandir = os.scandir
+
+    def scandir(path):
+        if path == str(blocked):
+            raise PermissionError(errno.EACCES, "Permission denied", path)
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    findings, _, warnings, scanned = scan_tree(tmp_path)
+    assert scanned == 1 and findings[0]["path"] == "good.py"
+    assert warnings == ["blocked: directory skipped (PermissionError)"]

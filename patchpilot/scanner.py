@@ -328,7 +328,12 @@ def scan_source(source, path, encoding="utf-8"):
 def scan_tree(root: Path):
     findings, warnings, files = [], [], {}
     scanned = 0
-    for directory, dirs, names in os.walk(root, followlinks=False):
+
+    def directory_error(error):
+        path = Path(error.filename or root).relative_to(root)
+        warnings.append(f"{path}: directory skipped ({type(error).__name__})")
+
+    for directory, dirs, names in os.walk(root, followlinks=False, onerror=directory_error):
         dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in SKIP_DIRS
                          and not (Path(directory) / name).is_symlink())
         for name in sorted(names):
