@@ -3,6 +3,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from textwrap import dedent
+from uuid import UUID
 
 import pytest
 
@@ -18,7 +19,7 @@ from patchpilot.scanner import scan_source, scan_tree
             cx = db.connect(":memory:")
             def users(name):
                 return cx.execute(f"SELECT name FROM users WHERE name = '{name}'")
-        """), "SQL injection", "(name,)"),
+        """), "SQL injection", "(format(name),)"),
         ("API_KEY = 'FAKE_TEST_VALUE'", "Hardcoded credential", "environ['API_KEY']"),
         ("from pickle import loads as decode\nvalue = decode(payload)", "Unsafe deserialization", "_pp_json.loads(payload)"),
         ("result = eval(payload)", "Unsafe deserialization", "_pp_json.loads(payload)"),
@@ -121,3 +122,23 @@ def test_path_repairs_keep_separate_roots_after_rescan(tmp_path):
     exec(source.read_text(), namespace)
     assert namespace["first"]("sample.txt") == "one"
     assert namespace["second"]("sample.txt") == "two"
+
+
+def test_parameterized_sql_preserves_text_conversion_for_quoted_values():
+    source = dedent("""
+        import sqlite3
+        cx = sqlite3.connect(":memory:")
+        cx.execute("CREATE TABLE users (name TEXT)")
+        def users(name):
+            return cx.execute(f"SELECT name FROM users WHERE name = '{name}'").fetchall()
+    """)
+    finding, = scan_source(source, "sample.py")
+    lines = source.splitlines(keepends=True)
+    lines[finding["start"]:finding["end"]] = finding["replacement"]
+    value = UUID(int=0)
+    for code in (source, "".join(lines)):
+        namespace = {}
+        exec(code, namespace)
+        namespace["cx"].execute("INSERT INTO users VALUES (?)", (str(value),))
+        assert namespace["users"](value) == [(str(value),)]
+        namespace["cx"].close()

@@ -97,13 +97,17 @@ def sql_repair(node, names, connections, cursors):
         return None
     after = suffix[0].value if suffix and isinstance(suffix[0], ast.Constant) else ""
     before = prefix.value
-    if before.endswith("'") and after.startswith("'"):
+    quoted = before.endswith("'") and after.startswith("'")
+    if quoted:
         before, after = before[:-1], after[1:]
     if not SQL_SELECT.fullmatch(before) or not re.fullmatch(r"\s*;?\s*", after):
         return None
+    value = ast.unparse(param.value)
+    if quoted:
+        value = f"format({value})"
     return Repair(query, "High", "SQL injection",
                   "Formatting data directly into a SQLite query lets data change the SQL. Bind the value as a parameter.",
-                  f"{before + '?' + after!r}, ({ast.unparse(param.value)},)")
+                  f"{before + '?' + after!r}, ({value},)")
 
 
 def repaired_calls(node, names, connections, cursors):

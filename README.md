@@ -46,7 +46,7 @@ PatchPilot shows the query, explains how the f-string lets data change the SQL, 
 +++ b/app.py
 @@ -15,1 +15,1 @@
 -    return connection.execute(f"SELECT name FROM users WHERE name = '{name}'").fetchall()
-+    return connection.execute('SELECT name FROM users WHERE name = ?', (name,)).fetchall()
++    return connection.execute('SELECT name FROM users WHERE name = ?', (format(name),)).fetchall()
 ```
 
 ## Local web app
