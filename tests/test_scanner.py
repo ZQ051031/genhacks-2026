@@ -1,6 +1,7 @@
 import json
 import shutil
 import subprocess
+from html import escape
 from pathlib import Path
 from textwrap import dedent
 from uuid import UUID
@@ -142,3 +143,11 @@ def test_parameterized_sql_preserves_text_conversion_for_quoted_values():
         namespace["cx"].execute("INSERT INTO users VALUES (?)", (str(value),))
         assert namespace["users"](value) == [(str(value),)]
         namespace["cx"].close()
+
+
+def test_html_repair_keeps_tuple_interpolation():
+    source = "def profile(a, b):\n    return f'<p>{a, b}</p>'\n"
+    finding, = scan_source(source, "sample.py")
+    namespace = {}
+    exec(source.splitlines(keepends=True)[0] + "".join(finding["replacement"]), namespace)
+    assert namespace["profile"]("A", "B") == f"<p>{escape(str(('A', 'B')))}</p>"

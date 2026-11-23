@@ -222,9 +222,16 @@ def repairs(tree, source, filename):
                         and re.fullmatch(r"<(p|div|span|h[1-6])>", prior.value)
                         and following.value == f"</{prior.value[1:]}"):
                     expr = value.value
+                    escaped = f"_pp_html.escape(str({ast.unparse(expr)}))"
+                    if isinstance(expr, ast.Tuple) and expr.elts:
+                        first = expr.elts[0]
+                        segment = ast.get_source_segment(source, expr)
+                        if (segment.startswith("{") and segment.endswith("}")
+                                and (expr.lineno, expr.col_offset) < (first.lineno, first.col_offset)):
+                            escaped = "{" + escaped + "}"
                     yield Repair(expr, "Medium", "Unescaped HTML output",
                                  "The value is placed directly into HTML. Escape it before returning the markup.",
-                                 f"_pp_html.escape(str({ast.unparse(expr)}))", ("import html as _pp_html",))
+                                 escaped, ("import html as _pp_html",))
         if isinstance(node, ast.Call) and qualified(node.func, names) == "open" and node.args:
             path = node.args[0]
             if (isinstance(path, ast.Call) and qualified(path.func, names) == "os.path.join"
