@@ -27,14 +27,14 @@ code{overflow-wrap:anywhere}.error{border-color:#f3a69c}.badge{font-size:.8rem;t
 """
 
 
-def page(state, token, error=""):
+def page(state, token, access_path, error=""):
     token_field = f'<input type="hidden" name="csrf" value="{escape(token)}">'
     parts = [
         '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
         f"<title>PatchPilot · Review workspace</title><style>{STYLE}</style><main>",
         '<header><span class="eyebrow">GENHACKS 2026 · LOCAL CODE REVIEW</span><h1>PatchPilot</h1>',
         '<p class="muted">Scan Python, inspect the evidence, and decide exactly what changes.</p></header>',
-        '<section class="panel"><form method="post" action="/scan">',
+        f'<section class="panel"><form method="post" action="{access_path}/scan">',
         token_field,
         '<label for="source">Repository URL or local folder</label><div class="row">',
         '<input required id="source" name="source" placeholder="https://github.com/owner/repo or ./examples/vulnerable-app">',
@@ -48,7 +48,8 @@ def page(state, token, error=""):
             f'<p class="muted">Workspace: <code>{escape(state["root"])}</code></p>',
             '<div class="stats">',
             *(f'<span class="{level.lower()}">{level}: {count}</span>' for level, count in summary(state).items()),
-            '</div><p><br><a href="/report.md">Markdown report</a> · <a href="/report.json">JSON report</a></p>',
+            f'</div><p><br><a href="{access_path}/report.md">Markdown report</a> · '
+            f'<a href="{access_path}/report.json">JSON report</a></p>',
         ])
         if state["warnings"]:
             parts.extend(["<details><summary>Scan warnings</summary><ul>",
@@ -68,7 +69,7 @@ def page(state, token, error=""):
             parts.append(f'<pre>{escape(item["patch"])}</pre>')
             if status != "applied":
                 parts.extend([
-                    '<form method="post" action="/decision" class="row">', token_field,
+                    f'<form method="post" action="{access_path}/decision" class="row">', token_field,
                     f'<input type="hidden" name="run" value="{state["run_id"]}">',
                     f'<input type="hidden" name="id" value="{identifier}">',
                     '<button name="action" value="approved">Approve</button>',
@@ -92,6 +93,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
         for name, value in headers:
@@ -101,6 +103,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def trusted_host(self):
         return self.headers.get("Host") in self.server.allowed_hosts
+
+    def authorized_route(self):
+        parts = self.path.split("/", 2)
+        if parts[0] or len(parts) < 2:
+            return None
+        access_path = "/" + parts[1]
+        if not hmac.compare_digest(access_path.encode("utf-8"), self.server.access_path.encode("ascii")):
+            return None
+        return "/" + (parts[2] if len(parts) == 3 else "")
 
     def current_state(self):
         try:
@@ -112,11 +123,15 @@ class Handler(BaseHTTPRequestHandler):
         if not self.trusted_host():
             self.respond(403, "Untrusted host.")
             return
+        route = self.authorized_route()
+        if route is None:
+            self.respond(403, "Open the private URL printed when PatchPilot starts.")
+            return
         state = self.current_state()
-        if self.path == "/":
-            self.respond(200, page(state, self.server.token))
-        elif self.path in {"/report.md", "/report.json"} and state is not None:
-            extension = self.path.rsplit(".", 1)[1]
+        if route == "/":
+            self.respond(200, page(state, self.server.token, self.server.access_path))
+        elif route in {"/report.md", "/report.json"} and state is not None:
+            extension = route.rsplit(".", 1)[1]
             mime = "application/json" if extension == "json" else "text/markdown; charset=utf-8"
             self.respond(200, render(state, extension), mime,
                          [("Content-Disposition", f'attachment; filename="patchpilot-report.{extension}"')])
@@ -126,6 +141,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.trusted_host():
             self.respond(403, "Untrusted host.")
+            return
+        route = self.authorized_route()
+        if route is None:
+            self.respond(403, "Open the private URL printed when PatchPilot starts.")
             return
         origin = self.headers.get("Origin")
         if origin is not None and origin != "http://" + self.headers["Host"]:
@@ -147,9 +166,9 @@ class Handler(BaseHTTPRequestHandler):
         state = self.current_state()
         anchor = ""
         try:
-            if self.path == "/scan":
+            if route == "/scan":
                 store.scan(fields.get("source", [""])[0].strip())
-            elif self.path == "/decision":
+            elif route == "/decision":
                 if state is None or fields.get("run", [""])[0] != state["run_id"]:
                     raise ReviewError("This form is from a previous scan. Reload before reviewing.")
                 identifier = fields.get("id", [""])[0]
@@ -163,9 +182,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(404, "Not found.")
                 return
         except (ReviewError, OSError) as error:
-            self.respond(400, page(state, self.server.token, str(error)))
+            self.respond(400, page(state, self.server.token, self.server.access_path, str(error)))
             return
-        self.respond(303, headers=[("Location", "/" + anchor)])
+        self.respond(303, headers=[("Location", f"{self.server.access_path}/{anchor}")])
 
 
 def make_server(home, port):
@@ -173,11 +192,12 @@ def make_server(home, port):
     bound_port = server.server_address[1]
     server.allowed_hosts = {f"127.0.0.1:{bound_port}", f"localhost:{bound_port}"}
     server.token = secrets.token_urlsafe(32)
+    server.access_path = "/" + secrets.token_urlsafe(32)
     server.store = Store(home)
     return server
 
 
 def serve(home, port):
     with make_server(home, port) as server:
-        print(f"PatchPilot listening on http://127.0.0.1:{server.server_address[1]}", flush=True)
+        print(f"Open PatchPilot's private URL: http://127.0.0.1:{server.server_address[1]}{server.access_path}/", flush=True)
         server.serve_forever()

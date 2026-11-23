@@ -20,10 +20,12 @@ def test_web_review_and_report_flow(tmp_path):
         try:
             port = server.server_address[1]
 
-            def request(path, fields=None, host=None):
+            def request(path, fields=None, host=None, authenticated=True):
                 connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
                 try:
                     headers = {"Host": host} if host else {}
+                    if authenticated:
+                        path = server.access_path + path
                     if fields is not None:
                         headers["Content-Type"] = "application/x-www-form-urlencoded"
                         connection.request("POST", path, urlencode(fields), headers)
@@ -37,11 +39,18 @@ def test_web_review_and_report_flow(tmp_path):
             status, landing = request("/")
             assert status == 200
             token, = set(re.findall(r'name="csrf" value="([^"]+)"', landing))
+            assert f'action="{server.access_path}/scan"' in landing
             assert request("/", host="attacker.invalid")[0] == 403
             assert request("/scan", {"source": str(project)})[0] == 403
             assert request("/scan", {"source": str(project), "csrf": token})[0] == 303
             status, review = request("/")
             assert status == 200
+            guest_status, guest_view = request("/", authenticated=False)
+            assert guest_status == 403 and token not in guest_view and "app.py:2" not in guest_view
+            assert request("/report.json", authenticated=False)[0] == 403
+            assert request("/report.md", authenticated=False)[0] == 403
+            assert request("/scan", {"source": str(project), "csrf": token}, authenticated=False)[0] == 403
+            assert f'href="{server.access_path}/report.json"' in review
             assert "&lt;p&gt;" in review and "<p>{name}</p>" not in review
             assert "Apply approved patch" not in review
             run, = set(re.findall(r'name="run" value="([^"]+)"', review))

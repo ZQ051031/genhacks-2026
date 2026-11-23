@@ -1,8 +1,9 @@
 # PatchPilot demo script — 2:45
 
 **Before recording (not on timer):** From the clone, install the requirements,
-start `python -m patchpilot web` in a terminal, and open
-`http://127.0.0.1:8765`. Make a clean copy of the fixture:
+start `python -m patchpilot web` off-camera, and open the private URL printed
+in the terminal. Hide the browser's address bar while recording. Make a clean
+copy of the fixture:
 
 ```sh
 cp -R examples/vulnerable-app "$HOME/patchpilot-demo"

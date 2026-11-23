@@ -55,7 +55,7 @@ PatchPilot shows the query, explains how the f-string lets data change the SQL, 
 python -m patchpilot web
 ```
 
-Open **http://127.0.0.1:8765**. Enter a repository URL or folder. Inspect each finding's evidence, explanation, and diff. Click **Approve** or **Reject**. Approval alone changes no code; an approved card exposes a separate **Apply approved patch** button. Use the report links to download the latest Markdown or JSON. Use `--port 9000` if needed; the server binds only to loopback and has review state separate from the CLI.
+Open the **private loopback URL printed in the terminal**. The link grants access to the current web session; don't share it. Enter a repository URL or folder. Inspect each finding's evidence, explanation, and diff. Click **Approve** or **Reject**. Approval alone changes no code; an approved card exposes a separate **Apply approved patch** button. Use the report links to download the latest Markdown or JSON. Use `--port 9000` if needed; the server binds only to loopback and has review state separate from the CLI.
 
 To try applying a patch in either interface without editing the checked-in fixture, copy `examples/vulnerable-app` to a scratch directory and scan the copy.
 
