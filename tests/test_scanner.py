@@ -1,6 +1,7 @@
 import json
 import shutil
 import subprocess
+from pathlib import Path
 from textwrap import dedent
 
 import pytest
@@ -102,3 +103,21 @@ def test_credentials_that_share_a_line_are_repaired_and_redacted_together(tmp_pa
     store.apply(state, item["id"])
     assert "FAKE_TEST_" not in source.read_text()
     assert "API_KEY = _pp_os.environ['API_KEY']; API_TOKEN = _pp_os.environ['API_TOKEN']" in source.read_text()
+
+
+def test_path_repairs_keep_separate_roots_after_rescan(tmp_path):
+    source = tmp_path / "sample.py"
+    source.write_text("import os\n"
+                      "first = lambda filename: open(os.path.join('one', filename))\n"
+                      "second = lambda filename: open(os.path.join('two', filename))\n")
+    store = Store(tmp_path / ".state")
+    for _ in range(2):
+        state = store.scan(str(tmp_path))
+        finding = state["findings"][0]
+        assert finding["category"] == "Path traversal"
+        store.decide(state, finding["id"], "approved")
+        store.apply(state, finding["id"])
+    namespace = {"open": lambda path: Path(path).parent.name}
+    exec(source.read_text(), namespace)
+    assert namespace["first"]("sample.txt") == "one"
+    assert namespace["second"]("sample.txt") == "two"

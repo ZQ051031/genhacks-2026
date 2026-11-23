@@ -144,6 +144,24 @@ def repaired_calls(node, names, connections, cursors):
                      "_pp_secrets.choice", ("import secrets as _pp_secrets",))
 
 
+def all_identifiers(table):
+    identifiers = set(table.get_identifiers())
+    for child in table.get_children():
+        identifiers.update(all_identifiers(child))
+    return identifiers
+
+
+def fresh_root_names(taken):
+    sequence = 1
+    while True:
+        root = "_pp_root" if sequence == 1 else f"_pp_root_{sequence}"
+        path_type = f"{root}_Path"
+        if root not in taken and path_type not in taken:
+            taken.update((root, path_type))
+            return root, path_type
+        sequence += 1
+
+
 def repairs(tree, source, filename):
     names = imported_names(tree)
     statements = list(ast.walk(tree))
@@ -154,6 +172,7 @@ def repairs(tree, source, filename):
                and node.value.func.attr == "cursor" and qualified(node.value.func.value, names) in connections
                for target in node.targets if isinstance(target, ast.Name)}
     symbols = symtable.symtable(source, filename, "exec")
+    identifiers = all_identifiers(symbols)
     module_names = {symbol.get_name() for symbol in symbols.get_symbols()
                     if symbol.is_assigned() or symbol.is_imported() or symbol.is_namespace()}
     yield from credential_repairs(statements)
@@ -209,10 +228,11 @@ def repairs(tree, source, filename):
                     and isinstance(path.args[0], ast.Constant) and isinstance(path.args[0].value, str)
                     and isinstance(path.args[1], ast.Name)):
                 base, name = map(ast.unparse, path.args)
+                root, path_type = fresh_root_names(identifiers)
                 yield Repair(path, "High", "Path traversal",
                              "An unrestricted file name can escape the intended root. Anchor resolution to the configured directory.",
-                             f"_pp_root / (_pp_root / {name}).resolve().relative_to(_pp_root)",
-                             ("from pathlib import Path as _pp_Path", f"_pp_root = _pp_Path({base}).resolve()"))
+                             f"{root} / ({root} / {name}).resolve().relative_to({root})",
+                             (f"from pathlib import Path as {path_type}", f"{root} = {path_type}({base}).resolve()"))
 
 
 def source_lines(source):
